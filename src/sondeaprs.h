@@ -44,6 +44,8 @@ struct sondeaprs_SDRBLOCK {
 
 #define sondeaprs_BEFOREBURST 100000
 
+enum send_type { type_send_pos, type_send_raw_only, type_send_duplicate };
+typedef enum send_type sondeaprs_type; 
 extern void sondeaprs_senddata(double, double, double,
                 double, double, double, double,
                 double, double, double, double,
@@ -52,7 +54,7 @@ extern void sondeaprs_senddata(double, double, double,
                 uint32_t, uint32_t, uint32_t, uint32_t, double,
                  char [], uint32_t, uint32_t, double,
                 char, char, int32_t, char [], uint32_t,
-                 char [], uint32_t, struct sondeaprs_SDRBLOCK);
+                 char [], uint32_t, struct sondeaprs_SDRBLOCK,uint32_t ip);
 
 extern int32_t sondeaprs_GetIp(char [], uint32_t, uint32_t *,
                 uint32_t *, uint32_t *);
@@ -66,6 +68,8 @@ extern char sondeaprs_objname[100];
 extern char sondeaprs_commentfn[1025];
 
 extern char sondeaprs_csvfilename[1025];
+
+extern char sondeaprs_SQL[2];
 
 extern char sondeaprs_sym[2];
 

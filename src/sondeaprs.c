@@ -6,7 +6,7 @@
  * SPDX-License-Identifier:	GPL-2.0+
  */
 
-
+#include <stdio.h>
 #define X2C_int32
 #define X2C_index32
 #ifndef sondeaprs_H_
@@ -30,6 +30,9 @@
 #include "aprspos.h"
 #endif
 #include <math.h>
+#ifndef sondedb_H_
+#include "sondedb.h"
+#endif
 
 
 
@@ -587,6 +590,46 @@ v,dist,azimuth,elevation,ser,TXdBm,batt,TxOff\012",1000u);
    X2C_PFREE(objname);
 } /* end wrcsv() */
 
+
+static void wrSQL(uint32_t sattime, const char typstr[],
+                uint32_t typstr_len, char objname[],
+                uint32_t objname_len, double lat, double long0,
+                double alt, double speed, double dir,
+                double clb, double egmalt, double og,
+                double mhz, uint32_t goodsats, double vBatt,
+				uint32_t txtime, uint32_t burstKill,
+                uint32_t uptime, double hp, double hyg,
+                double temp, double ozon, double otemp,
+                double pumpmA, double pumpv,
+                const struct sondeaprs_SDRBLOCK sdr, double dist,
+                double azi, double ele, const char fullid[],
+                uint32_t fullid_len,
+                double hrms, double vrms,
+                char usercall[],
+                uint32_t usercall_len,
+                uint32_t calperc,
+                uint32_t sd_log_freq,
+				uint32_t ip
+                )
+{
+   int32_t fd;
+   char h[1000];
+   char s[1000];
+   X2C_PCOPY((void **)&objname,objname_len);
+   if(sondedb_mysql_server[0]<' ') { goto label; }
+   	
+   s[0] = 0;
+   sd_log_freq = sd_log_freq * 10UL;	
+
+   senddata_db(type_send_pos, lat, long0, alt, speed, dir, clb, hp, hyg, temp, ozon,
+                otemp, pumpmA, pumpv, 0.0, mhz, hrms, vrms, sattime, uptime,
+                objname, objname_len, egmalt, goodsats, usercall,
+                usercall_len, calperc, sd_log_freq, typstr, txtime,
+                burstKill, "", 1ul, "", "", "", "",
+                "", vBatt, 0.0, "", (unsigned char)0, (unsigned char)0, "", ip);
+   label:;
+   X2C_PFREE(objname);
+} /* end wrSQL() */
 
 static double egm96corr(double lat, double long0,
                 double alt)
@@ -1665,7 +1708,7 @@ extern void sondeaprs_senddata(double lat, double long0,
                 uint32_t calperc, double hp, char force,
                 char altnoegm, int32_t txtime, char typstr[],
                 uint32_t typstr_len, char fullid[],
-                uint32_t fullid_len, struct sondeaprs_SDRBLOCK sdr)
+                uint32_t fullid_len, struct sondeaprs_SDRBLOCK sdr,uint32_t ip)
 {
    uint8_t e;
    uint32_t nt;
@@ -1689,15 +1732,27 @@ extern void sondeaprs_senddata(double lat, double long0,
    if (!egmoff) {
       if (altnoegm) altNN = alt;
       else altNN = egm96corr(lat, long0, alt);
+printf(">> Alt: %8.3f  altNN: %8.3f  Diff: %8f \n", alt, altNN, fabs(altNN-alt));
       if (altNN>(-1000.0)) {
          og = getoverground(lat, long0, altNN);
-         if (og>=0.0) btalt = og;
+	    printf(">> Over Ground Alt: %8f  \n", og);
+        if (og>=0.0) {
+			//btalt = og; 
+		}
+	    else {
+			og = altNN; 
+		}
       }
       else if (fabs(altNN-alt)>250.0) {
          osic_WrFixed((float)(altNN-alt), 2L, 1UL);
          osi_WrStrLn("m egm96 correction?", 20ul);
       }
    }
+	if(sondeaprs_verb)
+	{
+		printf("#<1> sondeaprs_senddata\n");
+	}
+   
    /*- azimuth elevation distance */
    myazi = (-2.E+4);
    myele = (-2.E+4);
@@ -1736,6 +1791,18 @@ extern void sondeaprs_senddata(double lat, double long0,
                 hyg, temp, ozon, otemp, pumpmA, pumpv, sdr, mydist, myazi,
                 myele, fullid, fullid_len, txpower, vBatt, txtime, usercall,
                 usercall_len);
+   }
+
+   if (sondedb_mysql_server[0UL]) {
+	if(sondeaprs_verb)
+	{
+		printf("#<3> wrSQL\n");
+	}
+      wrSQL(sattime, typstr, typstr_len, objname, objname_len, lat, long0,
+                altNN, speed, dir, clb, og, og, mhz, goodsats, vBatt, txtime, 0,
+                uptime, hp, hyg, temp, ozon, otemp, pumpmA, pumpv, sdr,
+                mydist, myazi, myele, fullid, fullid_len, hrms, vrms,  
+                usercall, usercall_len, calperc, sdr.freq, ip);
    }
    if (aprsstr_Length(usercall, usercall_len)<3UL) {
       osi_WrStrLn("no tx without <mycall>", 23ul);
@@ -1989,6 +2056,10 @@ extern void sondeaprs_senddata(double lat, double long0,
          }
       }
    }
+	if(sondeaprs_verb)
+	{
+		printf("#<2> sondeaprs_senddata\n");
+	}
 } /* end senddata() */
 
 
@@ -2001,6 +2072,7 @@ extern void sondeaprs_BEGIN(void)
    libsrtm_BEGIN();
    osi_BEGIN();
    aprsstr_BEGIN();
+   sondedb_BEGIN();
    contexts = 0;
    sondeaprs_udpsock = -1L;
    sondeaprs_commentfn[0UL] = 0;

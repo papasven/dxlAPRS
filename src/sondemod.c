@@ -42,6 +42,9 @@
 #include "aprspos.h"
 #endif
 #include <signal.h>
+#ifndef sondedb_H_
+#include "sondedb.h"
+#endif
 
 /* decode RS92, RS41, SRS-C34, DFM, M10, iMET Radiosonde by OE5DXL */
 #define sondemod_CONTEXTLIFE 3600
@@ -94,6 +97,9 @@ static char sondemod_EMPTYAUX = '\003';
 
 #define sondemod_DEFAULTSUBTYP 255
 /* dfm subtype wild card */
+
+#define sondemod_MAXOLDFRAMENOBEHIND 10
+/* accept old frame limit*/
 
 typedef uint32_t SET51[2];
 
@@ -564,6 +570,10 @@ static void Parms(void)
    sondeaprs_verb = 0;
    sondeaprs_verb2 = 0;
    sondeaprs_json = 0;
+   sondedb_mysql_user[0] = 0;
+   sondedb_mysql_pass[0] = 0;
+   sondedb_mysql_db[0] = 0;
+   sondedb_mysql_server[0] = 0;
    sendquick = 1UL;
    sondeaprs_myalt = (-5.E+5f);
    sondeaprs_mypos.lat = 0.0f;
@@ -837,6 +847,10 @@ at to this file or pipe", 73ul);
 ived in Data) from SDR-parameter +afc", 85ul);
                osi_WrStrLn("                  do only with calibrated SDR, ac\
 cept wrong data from alias receptions", 87ul);
+               osi_WrStrLn(" -ms <server>   MySQL server", 29ul );
+               osi_WrStrLn(" -mu <user>     MySQL user", 27ul);
+               osi_WrStrLn(" -mp <pass>     MySQL password", 31ul);
+               osi_WrStrLn(" -md <db>       MySQL database", 31ul);
                osi_WrStrLn(" -N <meter>     my altitude over NN for Distance/\
 Elevation to sonde output", 75ul);
                osi_WrStrLn(" -o <UDPport>   receive demodulated data via UDP \
@@ -911,6 +925,37 @@ USE, not exact)", 65ul);
             }
             err = 1;
          }
+      } else       
+      if ((h[0U]=='-' && h[1U] && h[2U]) && h[3U]==0) {
+         if (h[1U]=='m') {
+            if(h[2U]=='s')
+            {
+               osi_NextArg(sondedb_mysql_server, 100);
+               if(sondedb_mysql_server[0]<' ') Error("-ms <server>", 13);
+               // printf("MySQL-Server: '%s'\n", sondedb_mysql_server);
+            }
+            else if(h[2U]=='u')
+            {
+               osi_NextArg(sondedb_mysql_user, 100);
+               if(sondedb_mysql_user[0]<' ') Error("-ms <user>", 11);
+               //printf("MySQL-User: %s\n", sondedb_mysql_user);
+            }
+            else if(h[2U]=='p')
+            {
+               osi_NextArg(sondedb_mysql_pass, 100);
+               if(sondedb_mysql_pass[0]<' ') Error("-mp <pass>", 11);
+               //printf("MySQL-Pass: %s\n", sondedb_mysql_pass);
+            }
+            else if(h[2U]=='d')
+            {
+               osi_NextArg(sondedb_mysql_db, 100);
+               if(sondedb_mysql_db[0]<' ') Error("-md <db>", 8);
+               //printf("MySQL-DB: %s\n", sondedb_mysql_db);
+            }
+            else
+                 Error("-m<s,u,p,d>", 12);
+         } 
+		 else err = 1;
       }
       else err = 1;
       if (err) break;
@@ -921,6 +966,8 @@ USE, not exact)", 65ul);
       osi_WrStrLn("< use -h", 9ul);
       X2C_ABORT();
    }
+   if (strlen(sondedb_mysql_pass)==0 && getenv("SM_MYSQL_PASS"))
+     strncpy(sondedb_mysql_pass, getenv("SM_MYSQL_PASS"), 99);
    if ((sondeaprs_maxsenddistance>0UL && sondeaprs_mypos.lat==0.0f)
                 && sondeaprs_mypos.long0==0.0f) {
       osi_WrStrLn("Warning: -G needs Your -P <Position>", 37ul);
@@ -1865,18 +1912,23 @@ static void decodeframe(uint8_t m, uint32_t ip, uint32_t fromport)
                   osi_WrStrLn("", 1ul);
                }
             }
-            else if (contextr9.framenum==frameno && !contextr9.framesent) {
+			//--------------- framesent verhindert das gleiche Framenum´s von anderen geloggt werden
+            else if (contextr9.framenum==frameno /* && !contextr9.framesent */) {
                calok = 1;
             }
-            else if (frameno<contextr9.framenum && sondeaprs_verb) {
-               osi_WrStrLn("", 1ul);
-               osi_WrStr("got out of order frame number ", 31ul);
-               osic_WrINT32(frameno, 1UL);
-               osi_WrStr(" expecting ", 12ul);
-               osic_WrINT32(contextr9.framenum, 1UL);
-               osi_WrStr(" ", 2ul);
-               crdone = 0;
+            else if ((frameno<contextr9.framenum-sondemod_MAXOLDFRAMENOBEHIND) /* && sondeaprs_verb */) {
+				// calok = 1; // aelter als MaxOldFrames werden verworfen
+				if (sondeaprs_verb) {
+				   osi_WrStrLn("", 1ul);
+				   osi_WrStr("got out of order frame number ", 31ul);
+				   osic_WrINT32(frameno, 1UL);
+				   osi_WrStr(" expecting ", 12ul);
+				   osic_WrINT32(contextr9.framenum, 1UL);
+				   osi_WrStr(" ", 2ul);
+				   crdone = 0;
+				}
             }
+			else if (frameno<contextr9.framenum) calok = 1;  // alles zwischen aktuell-MaxOldFrameno und der aktuellen-1 sind ok
          }
          else if (typ=='i') {
             { /* with */
@@ -1988,7 +2040,7 @@ static void decodeframe(uint8_t m, uint32_t ip, uint32_t fromport)
                 gpstime-18UL, frameno, objname, 9ul, almanachage,
                 anonym1->goodsats, 0UL, 0.0, usercall, 11ul,
                 calperc91(anonym1->calibok), anonym1->hp, sondeaprs_nofilter,
-                 0, 0L, "RS92", 5ul, "", 1ul, sdrblock);
+                 0, 0L, "RS92", 5ul, "", 1ul, sdrblock, ip);
          anonym1->framesent = 1;
       }
       crdone = 1;
@@ -2508,7 +2560,7 @@ static void decodec34(const char rxb[], uint32_t rxb_len,
                 0.0, 0.0, ((systime-anonym2->tgpstime)+anonym2->gpstime)%86400UL+anonym2->gpsdate,
                  0UL, anonym2->name, 9ul, 0UL, 0UL, 0UL, 0.0, usercall, 11ul,
                  0UL, 0.0, sondeaprs_nofilter, 0, 0L, tstr, 51ul, "", 1ul,
-                sdrblock);
+                sdrblock, ip);
             anonym2->lastsent = systime;
          }
       }
@@ -2996,7 +3048,7 @@ static void decodedfm6(const char rxb[], uint32_t rxb_len,
                 (double) -(float)(uint32_t)sendmhzfromsdr, 0.0,
                 0.0, anonym->actrt, 0UL, anonym->name, 9ul, 0UL, 0UL, 0UL,
                 0.0, usercall, 11ul, 0UL, 0.0, sondeaprs_nofilter, 0, 0L,
-                typstr, 9ul, ser, 16ul, sdrblock);
+                typstr, 9ul, ser, 16ul, sdrblock, ip);
                anonym->lastsent = systime;
             }
          }
@@ -3607,17 +3659,21 @@ static void decoders41(const char rxb[], uint32_t rxb_len,
             pc->framenum = frameno;
             pc->tused = systime;
          }
-         else if (pc->framenum==frameno && !pc->framesent) {
-            calok = 1;
+		 // ---------------- framesent verhindert doppelte gleiche Lieferungen für die Datenbank 
+         else if (pc->framenum==frameno /* && !pc->framesent */ ) calok = 1;
+         else if (frameno<(pc->framenum-sondemod_MAXOLDFRAMENOBEHIND) /* && sondeaprs_verb */ ) {
+            // calok = 1; // aelter als MaxOldFrames werden verworfen
+						if (sondeaprs_verb) {
+							osi_WrStrLn("", 1ul);
+							osi_WrStr("got out of order frame number ", 31ul);
+							osic_WrINT32(frameno, 1UL);
+							osi_WrStr(" expecting ", 12ul);
+							osic_WrINT32(pc->framenum, 1UL);
+							osi_WrStr(" ", 2ul);
+						}
          }
-         else if (frameno<pc->framenum && sondeaprs_verb) {
-            osi_WrStrLn("", 1ul);
-            osi_WrStr("got out of order frame number ", 31ul);
-            osic_WrINT32(frameno, 1UL);
-            osi_WrStr(" expecting ", 12ul);
-            osic_WrINT32(pc->framenum, 1UL);
-            osi_WrStr(" ", 2ul);
-         }
+		 else if (frameno<pc->framenum) calok = 1;  // alles zwischen aktuell-MaxOldFrameno und der aktuellen-1 sind ok
+
          pc->flightstate = rxb[p+13UL]; /* 0 start, 1 flight, 2 decent */
          j = (uint32_t)(uint8_t)rxb[p+23UL]; /* calib frame number */
          if (j<=50UL && p<((rxb_len-1)-24UL)-15UL) {
@@ -3799,6 +3855,7 @@ static void decoders41(const char rxb[], uint32_t rxb_len,
    if (sondeaprs_verb) {
       wrsdr();
       osi_WrStrLn("", 1ul);
+      osi_WrStrLn("-----> sondeaprs_senddata?", 27ul);  
    }
    if (((((pc && nameok) && calok) && lat!=0.0) && long0!=0.0) && sats>0UL) {
       res = pc->txtime;
@@ -3809,7 +3866,7 @@ static void decoders41(const char rxb[], uint32_t rxb_len,
                 pc->gpssecond, frameno, pc->name, 9ul, 0UL, sats, txpower,
                 vBatt, usercall, 11ul, calperc41(pc->calibok), pressure,
                 sondeaprs_nofilter, 0, res, "RS41", 5ul, fullid, 12ul,
-                sdrblock);
+                sdrblock, ip);
       pc->framesent = 1;
    }
 /*  IF verb THEN WrStrLn("") END;   */
@@ -4032,15 +4089,20 @@ static void decodem10(const char rxb[], uint32_t rxb_len,
          pc->tused = systime;
       }
       else if (pc->framenum==frameno) {
-         if (!pc->framesent) calok = 1;
+         /* if (!pc->framesent) */ calok = 1;
       }
-      else if (sondeaprs_verb) {
-         osi_WrStr(" got old frame ", 16ul);
-         osic_WrINT32(frameno, 1UL);
-         osi_WrStr(" expected> ", 12ul);
-         osic_WrINT32(pc->framenum, 1UL);
-         osi_WrStr(" ", 2ul);
-      }
+	  // --------------- aelter als MaxOldFrames werden verworfen
+      else if (frameno<(pc->framenum-sondemod_MAXOLDFRAMENOBEHIND)) {
+		 if (sondeaprs_verb) {
+			 osi_WrStr(" got old frame ", 16ul);
+			 osic_WrINT32(frameno, 1UL);
+			 osi_WrStr(" expected> ", 12ul);
+			 osic_WrINT32(pc->framenum, 1UL);
+			 osi_WrStr(" ", 2ul);
+		}
+	  }
+	  // ---------------  alles zwischen aktuell-MaxOldFrameno und der aktuellen-1 sind ok
+	  else if (frameno<pc->framenum) calok = 1;
       if (rxb[16UL]=='E') {
          /* M20 */
          fnum = m10card(rxb, rxb_len, 37L, 1L);
@@ -4194,7 +4256,7 @@ static void decodem10(const char rxb[], uint32_t rxb_len,
                 0.0, (double) -(float)(uint32_t)sendmhzfromsdr,
                 0.0, 0.0, pc->gpssecond, 0UL, pc->name, 9ul, 0UL, sats, 0UL,
                 (double)batt, usercall, 11ul, 0UL, 0.0,
-                sondeaprs_nofilter, 0, 0L, wid, 4ul, fullid, 21ul, sdrblock);
+                sondeaprs_nofilter, 0, 0L, wid, 4ul, fullid, 21ul, sdrblock, ip);
       pc->framesent = 1;
    }
 } /* end decodem10() */
@@ -4508,7 +4570,7 @@ static void decodeimet(const char rxb[], uint32_t rxb_len,
                 (double) -(float)(uint32_t)sendmhzfromsdr, 0.0,
                 0.0, pc->gpssecond, pc->frnum, pc->name, 9ul, 0UL, sats, 0UL,
                  0.0, usercall, 11ul, 0UL, (double)pc->hpa,
-                sondeaprs_nofilter, 1, 0L, "iMET", 5ul, "", 1ul, sdrblock);
+                sondeaprs_nofilter, 1, 0L, "iMET", 5ul, "", 1ul, sdrblock, ip);
       pc->framesent = 1;
    }
 } /* end decodeimet() */
@@ -4750,7 +4812,7 @@ static void decodemp3(const char rxb[], uint32_t rxb_len,
                 0.0, pc->gpstime, 0UL, pc->name, 9ul, 0UL, sats, 0UL, 0.0,
                 usercall, 11ul, 0UL, (double)X2C_max_real,
                 sondeaprs_nofilter, 1, 0L, "MRZ", 4ul, pc->ser, 21ul,
-                sdrblock);
+                sdrblock, ip);
       pc->framesent = 1;
    }
    if (sondeaprs_verb) {
